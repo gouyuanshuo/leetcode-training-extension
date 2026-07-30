@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>LeetCode training extension browser fixture</title>
+    <style>
+      body { margin: 0; background: #fff; color: #222; font-family: sans-serif; }
+      .toolbar { padding: 20px; }
+      .problem-list { min-height: 420px; padding: 20px; }
+      .row { display: grid; grid-template-columns: 1fr 100px; padding: 16px; }
+    </style>
+  </head>
+  <body>
+    <div class="toolbar"><input placeholder="Search questions" /></div>
+    <div class="problem-list">
+      <div class="row"><a href="/problems/two-sum/">1. Two Sum</a><span>Easy</span></div>
+      <div class="row"><a href="/problems/add-two-numbers/">2. Add Two Numbers</a><span>Medium</span></div>
+      <div class="row"><a href="/problems/longest-substring-without-repeating-characters/">3. Longest Substring</a><span>Medium</span></div>
+      <div class="row"><a href="/problems/median-of-two-sorted-arrays/">4. Median</a><span>Hard</span></div>
+      <div class="row"><a href="/problems/longest-palindromic-substring/">5. Palindrome</a><span>Medium</span></div>
+      <div class="row"><a href="/problems/zigzag-conversion/">6. Zigzag</a><span>Medium</span></div>
+    </div>
+    <div id="qa-result">WAITING</div>
+    <script>
+      const started = Date.now();
+      let clicked = false;
+      const timer = setInterval(() => {
+        const toggle = document.querySelector("#lc-training-extension-toggle");
+        if (toggle && !clicked) {
+          clicked = true;
+          toggle.click();
+        }
+        const host = document.querySelector("#lc-training-extension-root");
+        const heading = host?.shadowRoot?.querySelector("h2")?.textContent;
+        if (heading) {
+          document.querySelector("#qa-result").textContent =
+            `PASS:${heading}`;
+          clearInterval(timer);
+        } else if (Date.now() - started > 25000) {
+          document.querySelector("#qa-result").textContent = "FAIL:timeout";
+          clearInterval(timer);
+        }
+      }, 100);
+    </script>
+  </body>
+</html>
