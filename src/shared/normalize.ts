@@ -151,7 +151,7 @@ export function applyRatings(
     const id = String(record.ID ?? "").trim();
     const slug = normalizeSlug(record.TitleSlug);
     const rating = numericOrNull(record.Rating);
-    if (!id || !slug || rating == null) continue;
+    if (!id || !slug || rating == null || rating <= 0) continue;
     const problem = ensureProblem(next, id, slug);
     problem.rating = Math.round(rating);
     if (record.TitleZH) problem.titleZh = record.TitleZH;
@@ -175,7 +175,7 @@ export function applyLevels(
     const id = String(record.ID ?? "").trim();
     const slug = normalizeSlug(record.Url);
     const level = numericOrNull(record.Level);
-    if (!id || !slug || level == null) continue;
+    if (!id || !slug || level == null || level <= 0) continue;
     const problem = ensureProblem(next, id, slug);
     problem.arithmeticLevel = Math.round(level);
     problem.difficulty =
@@ -258,9 +258,6 @@ export function applyStudyPlans(
       const titleZh = cleanStudyTitle(item.title, parsedId);
       if (titleZh) problem.titleZh = titleZh;
       if (!problem.titleEn) problem.titleEn = slugToTitle(slug);
-      if (problem.rating == null && item.score != null) {
-        problem.rating = Math.round(item.score);
-      }
       problem.premium = Boolean(item.isPremium) || problem.premium;
       if (!problem.directStudyNodeIds.includes(id)) {
         problem.directStudyNodeIds.push(id);

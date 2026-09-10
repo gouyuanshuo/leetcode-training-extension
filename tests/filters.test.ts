@@ -81,7 +81,9 @@ describe("rating buckets", () => {
 
   it("keeps unrated separate from numeric ranges", () => {
     expect(matchesRatingBucket(null, "unrated")).toBe(true);
+    expect(matchesRatingBucket(0, "unrated")).toBe(true);
     expect(matchesRatingBucket(null, "all")).toBe(true);
+    expect(matchesRatingBucket(0, "lt1200")).toBe(false);
     expect(matchesRatingBucket(null, "gte2400")).toBe(false);
   });
 });
@@ -127,4 +129,3 @@ describe("topic and condition composition", () => {
     }
   });
 });
-

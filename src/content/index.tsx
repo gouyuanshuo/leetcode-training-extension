@@ -1,7 +1,11 @@
 import { createRoot, type Root } from "react-dom/client";
 import styles from "./styles.css?inline";
 import { TrainingApp } from "./TrainingApp";
-import { DATA_STORAGE_KEY } from "../shared/config";
+import {
+  problemFromHref,
+  resolveProblemForElement
+} from "./nativeProblemIdentity";
+import { DATA_SCHEMA_VERSION, DATA_STORAGE_KEY } from "../shared/config";
 import { localeForHost, t } from "../shared/i18n";
 import type {
   BackgroundRequest,
@@ -49,7 +53,8 @@ function sendMessage<T>(request: BackgroundRequest): Promise<T> {
 
 async function readDataset(): Promise<NormalizedDataset | null> {
   const stored = await chrome.storage.local.get(DATA_STORAGE_KEY);
-  return (stored[DATA_STORAGE_KEY] as NormalizedDataset | undefined) ?? null;
+  const loaded = stored[DATA_STORAGE_KEY] as NormalizedDataset | undefined;
+  return loaded?.schemaVersion === DATA_SCHEMA_VERSION ? loaded : null;
 }
 
 async function ensureDataset(force = false): Promise<{
@@ -71,31 +76,6 @@ function isProblemsetHome(): boolean {
   return /^\/problemset\/?$/.test(location.pathname);
 }
 
-function problemFromHref(href: string): ProblemRecord | null {
-  if (!dataset) return null;
-  const match = href.match(/\/problems\/([^/?#]+)/);
-  if (!match) return null;
-  const id = dataset.problemIdBySlug[decodeURIComponent(match[1])];
-  return id ? dataset.problems[id] ?? null : null;
-}
-
-function problemNearElement(element: Element): ProblemRecord | null {
-  let current: Element | null = element;
-  for (let depth = 0; current && depth < 9; depth += 1) {
-    const links = current.querySelectorAll<HTMLAnchorElement>(
-      'a[href*="/problems/"]'
-    );
-    if (links.length === 1) {
-      const problem = problemFromHref(links[0].href);
-      if (problem) return problem;
-    }
-    // A container with multiple problem links is the whole list, not a row.
-    if (links.length > 1) return null;
-    current = current.parentElement;
-  }
-  return null;
-}
-
 function ratingColor(rating: number): string {
   if (rating < 1400) return "#00a86b";
   if (rating < 1900) return "#e5a100";
@@ -112,16 +92,43 @@ function arithmeticText(problem: ProblemRecord): string {
 
 function decorateNativeRatings(): void {
   if (!dataset) return;
-  const candidates = document.querySelectorAll<HTMLElement>(
-    "span, p, div"
+  const candidates = new Set<HTMLElement>(
+    document.querySelectorAll<HTMLElement>(
+      [
+        '[class*="text-sd-easy"]',
+        '[class*="text-sd-medium"]',
+        '[class*="text-sd-hard"]',
+        '[class*="text-lc-green-60"]',
+        '[class*="text-lc-yellow-60"]',
+        '[class*="text-lc-red-60"]'
+      ].join(",")
+    )
   );
+  for (const element of document.querySelectorAll<HTMLElement>(
+    "span, p, div"
+  )) {
+    if (
+      element.childElementCount === 0 &&
+      /^(Easy|Med\.?|Medium|Hard|简单|中等|困难)$/i.test(
+        element.textContent?.trim() ?? ""
+      )
+    ) {
+      candidates.add(element);
+    }
+  }
   const difficultyPattern =
     /^(Easy|Med\.?|Medium|Hard|简单|中等|困难)$/i;
 
   for (const element of candidates) {
     const text = element.textContent?.trim() ?? "";
     const originalText = element.getAttribute(ORIGINAL_TEXT_ATTRIBUTE);
-    if (!difficultyPattern.test(originalText ?? text)) continue;
+    const difficultyClass =
+      element.className.match(
+        /text-(?:sd-(easy|medium|hard)|lc-(green|yellow|red)-60)/i
+      ) ?? null;
+    if (!difficultyClass && !difficultyPattern.test(originalText ?? text)) {
+      continue;
+    }
     if (
       element.childElementCount > 0 ||
       element.closest(`#${TRAINING_HOST_ID}`)
@@ -129,47 +136,91 @@ function decorateNativeRatings(): void {
       continue;
     }
 
-    const problem = problemNearElement(element);
-    if (!problem?.rating) continue;
+    const problem = resolveProblemForElement(dataset, element);
+    if (!problem) continue;
 
     if (!originalText) {
-      element.setAttribute(ORIGINAL_TEXT_ATTRIBUTE, text);
+      const kind =
+        difficultyClass?.[1]?.toLowerCase() ??
+        ({
+          green: "easy",
+          yellow: "medium",
+          red: "hard"
+        }[difficultyClass?.[2]?.toLowerCase() ?? ""] as
+          | "easy"
+          | "medium"
+          | "hard"
+          | undefined);
+      const locale = localeForHost(location.hostname);
+      const fallback =
+        kind === "easy"
+          ? locale === "zh"
+            ? "简单"
+            : "Easy"
+          : kind === "medium"
+            ? locale === "zh"
+              ? "中等"
+              : "Med."
+            : kind === "hard"
+              ? locale === "zh"
+                ? "困难"
+                : "Hard"
+              : text;
+      element.setAttribute(ORIGINAL_TEXT_ATTRIBUTE, fallback);
     }
-    element.setAttribute(NATIVE_RATING_ATTRIBUTE, String(problem.rating));
-    const replacement = String(Math.round(problem.rating));
-    if (element.textContent !== replacement) element.textContent = replacement;
-    element.style.color = ratingColor(problem.rating);
-    element.title = `${
-      localeForHost(location.hostname) === "zh" ? "周赛 Rating" : "Contest rating"
-    }: ${replacement}`;
 
-    if (problem.arithmeticLevel != null) {
-      const row = element.parentElement;
+    if (problem.rating != null && problem.rating > 0) {
+      element.setAttribute(NATIVE_RATING_ATTRIBUTE, String(problem.rating));
+      const replacement = String(Math.round(problem.rating));
+      if (element.textContent !== replacement) element.textContent = replacement;
+      element.style.color = ratingColor(problem.rating);
+      element.title = `${
+        localeForHost(location.hostname) === "zh"
+          ? "周赛 Rating"
+          : "Contest rating"
+      }: ${replacement}`;
+    } else if (element.hasAttribute(NATIVE_RATING_ATTRIBUTE)) {
+      element.textContent =
+        element.getAttribute(ORIGINAL_TEXT_ATTRIBUTE) ?? "";
+      element.removeAttribute(NATIVE_RATING_ATTRIBUTE);
+      element.style.removeProperty("color");
+      element.removeAttribute("title");
+    }
+
+    const row = element.parentElement;
+    if (row) {
+      let badge = row.querySelector<HTMLElement>(
+        ":scope > [data-lc-training-level]"
+      );
       if (
-        row &&
-        !row.querySelector<HTMLElement>(
-          `[data-lc-training-level="${problem.id}"]`
-        )
+        problem.arithmeticLevel == null ||
+        problem.arithmeticLevel <= 0
       ) {
-        const badge = document.createElement("span");
+        badge?.remove();
+      } else {
+        if (!badge) {
+          badge = document.createElement("span");
+          badge.dataset.lcTrainingLevel = problem.id;
+          Object.assign(badge.style, {
+            display: "inline-flex",
+            alignItems: "center",
+            marginRight: "7px",
+            padding: "1px 5px",
+            border: "1px solid rgba(139,92,246,.35)",
+            borderRadius: "4px",
+            fontSize: "11px",
+            lineHeight: "18px",
+            color: "#a78bfa",
+            whiteSpace: "nowrap"
+          });
+          row.insertBefore(badge, element);
+        }
         badge.dataset.lcTrainingLevel = problem.id;
         badge.textContent = arithmeticText(problem);
         badge.title =
           localeForHost(location.hostname) === "zh"
             ? `算术评级：${problem.arithmeticLevel}`
             : `Arithmetic level: ${problem.arithmeticLevel}`;
-        Object.assign(badge.style, {
-          display: "inline-flex",
-          alignItems: "center",
-          marginLeft: "8px",
-          padding: "1px 6px",
-          borderRadius: "999px",
-          fontSize: "11px",
-          color: "#8b5cf6",
-          background: "rgba(139,92,246,.12)",
-          whiteSpace: "nowrap"
-        });
-        row.append(badge);
       }
     }
   }
@@ -197,10 +248,10 @@ function decorateProblemPage(): void {
   const badge = document.createElement("span");
   badge.dataset.lcTrainingDetailBadge = "true";
   const parts: string[] = [];
-  if (problem.rating != null) {
+  if (problem.rating != null && problem.rating > 0) {
     parts.push(`Rating ${Math.round(problem.rating)}`);
   }
-  if (problem.arithmeticLevel != null) {
+  if (problem.arithmeticLevel != null && problem.arithmeticLevel > 0) {
     parts.push(arithmeticText(problem));
   }
   if (!parts.length) return;
@@ -220,9 +271,11 @@ function decorateProblemPage(): void {
 }
 
 function findNativeProblemList(): HTMLElement | null {
+  if (!dataset) return null;
+  const currentDataset = dataset;
   const links = Array.from(
     document.querySelectorAll<HTMLAnchorElement>('a[href*="/problems/"]')
-  ).filter((link) => problemFromHref(link.href));
+  ).filter((link) => problemFromHref(currentDataset, link.href));
   if (links.length < 2) return null;
 
   const counts = new Map<HTMLElement, number>();
@@ -406,4 +459,3 @@ void ensureDataset(false)
     console.warn("[LeetCode Training] Initial data update failed", error);
   })
   .finally(scheduleProcess);
-

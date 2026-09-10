@@ -1,4 +1,4 @@
-export const DATA_SCHEMA_VERSION = 1;
+export const DATA_SCHEMA_VERSION = 2;
 export const DATA_STORAGE_KEY = "lc-training:dataset";
 export const FILTER_STORAGE_KEY = "lc-training:filters";
 export const STATUS_SESSION_PREFIX = "lc-training:status";
