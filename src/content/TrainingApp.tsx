@@ -485,11 +485,18 @@ export function TrainingApp({
                         ) : null}
                       </td>
                       <td>
-                        <span className={ratingClass(problem.rating)}>
-                          {problem.rating ?? "—"}
-                        </span>
+                        {problem.rating != null && problem.rating > 0 ? (
+                          <span className={ratingClass(problem.rating)}>
+                            {problem.rating}
+                          </span>
+                        ) : null}
                       </td>
-                      <td>{problem.arithmeticLevel ?? "—"}</td>
+                      <td>
+                        {problem.arithmeticLevel != null &&
+                        problem.arithmeticLevel > 0
+                          ? problem.arithmeticLevel
+                          : null}
+                      </td>
                     </tr>
                   );
                 })}

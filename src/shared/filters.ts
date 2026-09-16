@@ -20,8 +20,10 @@ export function matchesRatingBucket(
   bucket: RatingBucket
 ): boolean {
   if (bucket === "all") return true;
-  if (bucket === "unrated") return rating == null || !Number.isFinite(rating);
-  if (rating == null || !Number.isFinite(rating)) return false;
+  if (bucket === "unrated") {
+    return rating == null || !Number.isFinite(rating) || rating <= 0;
+  }
+  if (rating == null || !Number.isFinite(rating) || rating <= 0) return false;
 
   switch (bucket) {
     case "lt1200":

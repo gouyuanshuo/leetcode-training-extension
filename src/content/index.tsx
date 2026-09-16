@@ -3,9 +3,9 @@ import styles from "./styles.css?inline";
 import { TrainingApp } from "./TrainingApp";
 import {
   problemFromHref,
-  problemNearElement
-} from "./problemMatcher";
-import { DATA_STORAGE_KEY } from "../shared/config";
+  resolveProblemForElement
+} from "./nativeProblemIdentity";
+import { DATA_SCHEMA_VERSION, DATA_STORAGE_KEY } from "../shared/config";
 import { localeForHost, t } from "../shared/i18n";
 import type {
   BackgroundRequest,
@@ -53,7 +53,8 @@ function sendMessage<T>(request: BackgroundRequest): Promise<T> {
 
 async function readDataset(): Promise<NormalizedDataset | null> {
   const stored = await chrome.storage.local.get(DATA_STORAGE_KEY);
-  return (stored[DATA_STORAGE_KEY] as NormalizedDataset | undefined) ?? null;
+  const loaded = stored[DATA_STORAGE_KEY] as NormalizedDataset | undefined;
+  return loaded?.schemaVersion === DATA_SCHEMA_VERSION ? loaded : null;
 }
 
 async function ensureDataset(force = false): Promise<{
@@ -96,14 +97,24 @@ function decorateNativeRatings(): void {
       [
         '[class*="text-sd-easy"]',
         '[class*="text-sd-medium"]',
-        '[class*="text-sd-hard"]'
+        '[class*="text-sd-hard"]',
+        '[class*="text-lc-green-60"]',
+        '[class*="text-lc-yellow-60"]',
+        '[class*="text-lc-red-60"]'
       ].join(",")
     )
   );
   for (const element of document.querySelectorAll<HTMLElement>(
     "span, p, div"
   )) {
-    if (element.childElementCount === 0) candidates.add(element);
+    if (
+      element.childElementCount === 0 &&
+      /^(Easy|Med\.?|Medium|Hard|简单|中等|困难)$/i.test(
+        element.textContent?.trim() ?? ""
+      )
+    ) {
+      candidates.add(element);
+    }
   }
   const difficultyPattern =
     /^(Easy|Med\.?|Medium|Hard|简单|中等|困难)$/i;
@@ -111,12 +122,11 @@ function decorateNativeRatings(): void {
   for (const element of candidates) {
     const text = element.textContent?.trim() ?? "";
     const originalText = element.getAttribute(ORIGINAL_TEXT_ATTRIBUTE);
-    const hasDifficultyClass =
-      /text-sd-(easy|medium|hard)/i.test(element.className);
-    if (
-      !hasDifficultyClass &&
-      !difficultyPattern.test(originalText ?? text)
-    ) {
+    const difficultyClass =
+      element.className.match(
+        /text-(?:sd-(easy|medium|hard)|lc-(green|yellow|red)-60)/i
+      ) ?? null;
+    if (!difficultyClass && !difficultyPattern.test(originalText ?? text)) {
       continue;
     }
     if (
@@ -126,31 +136,40 @@ function decorateNativeRatings(): void {
       continue;
     }
 
-    const problem = problemNearElement(dataset, element);
+    const problem = resolveProblemForElement(dataset, element);
     if (!problem) continue;
 
     if (!originalText) {
-      const classDifficulty = element.className.match(
-        /text-sd-(easy|medium|hard)/i
-      )?.[1];
+      const kind =
+        difficultyClass?.[1]?.toLowerCase() ??
+        ({
+          green: "easy",
+          yellow: "medium",
+          red: "hard"
+        }[difficultyClass?.[2]?.toLowerCase() ?? ""] as
+          | "easy"
+          | "medium"
+          | "hard"
+          | undefined);
+      const locale = localeForHost(location.hostname);
       const fallback =
-        classDifficulty?.toLowerCase() === "easy"
-          ? localeForHost(location.hostname) === "zh"
+        kind === "easy"
+          ? locale === "zh"
             ? "简单"
             : "Easy"
-          : classDifficulty?.toLowerCase() === "medium"
-            ? localeForHost(location.hostname) === "zh"
+          : kind === "medium"
+            ? locale === "zh"
               ? "中等"
               : "Med."
-            : classDifficulty?.toLowerCase() === "hard"
-              ? localeForHost(location.hostname) === "zh"
+            : kind === "hard"
+              ? locale === "zh"
                 ? "困难"
                 : "Hard"
               : text;
       element.setAttribute(ORIGINAL_TEXT_ATTRIBUTE, fallback);
     }
 
-    if (problem.rating != null) {
+    if (problem.rating != null && problem.rating > 0) {
       element.setAttribute(NATIVE_RATING_ATTRIBUTE, String(problem.rating));
       const replacement = String(Math.round(problem.rating));
       if (element.textContent !== replacement) element.textContent = replacement;
@@ -162,7 +181,7 @@ function decorateNativeRatings(): void {
       }: ${replacement}`;
     } else if (element.hasAttribute(NATIVE_RATING_ATTRIBUTE)) {
       element.textContent =
-        element.getAttribute(ORIGINAL_TEXT_ATTRIBUTE) ?? text;
+        element.getAttribute(ORIGINAL_TEXT_ATTRIBUTE) ?? "";
       element.removeAttribute(NATIVE_RATING_ATTRIBUTE);
       element.style.removeProperty("color");
       element.removeAttribute("title");
@@ -173,7 +192,10 @@ function decorateNativeRatings(): void {
       let badge = row.querySelector<HTMLElement>(
         ":scope > [data-lc-training-level]"
       );
-      if (problem.arithmeticLevel == null) {
+      if (
+        problem.arithmeticLevel == null ||
+        problem.arithmeticLevel <= 0
+      ) {
         badge?.remove();
       } else {
         if (!badge) {
@@ -226,10 +248,10 @@ function decorateProblemPage(): void {
   const badge = document.createElement("span");
   badge.dataset.lcTrainingDetailBadge = "true";
   const parts: string[] = [];
-  if (problem.rating != null) {
+  if (problem.rating != null && problem.rating > 0) {
     parts.push(`Rating ${Math.round(problem.rating)}`);
   }
-  if (problem.arithmeticLevel != null) {
+  if (problem.arithmeticLevel != null && problem.arithmeticLevel > 0) {
     parts.push(arithmeticText(problem));
   }
   if (!parts.length) return;
@@ -249,9 +271,11 @@ function decorateProblemPage(): void {
 }
 
 function findNativeProblemList(): HTMLElement | null {
+  if (!dataset) return null;
+  const currentDataset = dataset;
   const links = Array.from(
     document.querySelectorAll<HTMLAnchorElement>('a[href*="/problems/"]')
-  ).filter((link) => dataset && problemFromHref(dataset, link.href));
+  ).filter((link) => problemFromHref(currentDataset, link.href));
   if (links.length < 2) return null;
 
   const counts = new Map<HTMLElement, number>();
