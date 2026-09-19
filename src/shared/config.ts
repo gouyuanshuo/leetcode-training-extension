@@ -1,6 +1,7 @@
 export const DATA_SCHEMA_VERSION = 1;
 export const DATA_STORAGE_KEY = "lc-training:dataset";
 export const FILTER_STORAGE_KEY = "lc-training:filters";
+export const SESSION_STORAGE_KEY = "lc-training:session";
 export const STATUS_SESSION_PREFIX = "lc-training:status";
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
