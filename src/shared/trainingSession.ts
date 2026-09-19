@@ -154,3 +154,18 @@ export function storedSessionRestore(
     restore: shouldMountTraining(pathname, session.active, mounted)
   };
 }
+
+export function canBeginOpenTraining(
+  inFlight: boolean,
+  pathname: string,
+  mounted: boolean
+): boolean {
+  return !inFlight && !mounted && isProblemsetHome(pathname);
+}
+
+export function shouldQueueRestore(
+  restore: boolean,
+  inFlight: boolean
+): boolean {
+  return restore && !inFlight;
+}

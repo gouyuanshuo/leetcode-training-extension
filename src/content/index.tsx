@@ -8,10 +8,12 @@ import {
 import { DATA_STORAGE_KEY, SESSION_STORAGE_KEY } from "../shared/config";
 import { localeForHost, t } from "../shared/i18n";
 import {
+  canBeginOpenTraining,
   isProblemsetHome,
   normalizeSession,
   sessionWriteFromStorage,
   shouldMountTraining,
+  shouldQueueRestore,
   storedSessionRestore,
   toggleClickAction,
   toggleMessageKey,
@@ -41,7 +43,7 @@ let currentUrl = location.href;
 let scheduled = false;
 let session = normalizeSession(undefined);
 let datasetState: ToggleDatasetState = "loading";
-let restoreAttempt: Promise<void> | null = null;
+let openInFlight = false;
 let processChain: Promise<void> = Promise.resolve();
 
 function sendMessage<T>(request: BackgroundRequest): Promise<T> {
@@ -388,12 +390,21 @@ async function applyUrlChange(): Promise<void> {
 }
 
 async function openTraining(): Promise<void> {
-  if (trainingHost || !isProblemsetHome(location.pathname)) return;
-  await writeSession({ type: "open" });
-  if (!(await stillCanMount())) return;
+  if (
+    !canBeginOpenTraining(
+      openInFlight,
+      location.pathname,
+      Boolean(trainingHost)
+    )
+  ) {
+    return;
+  }
+  openInFlight = true;
   const toggle = document.getElementById(TOGGLE_ID) as HTMLButtonElement | null;
   if (toggle) toggle.disabled = true;
   try {
+    await writeSession({ type: "open" });
+    if (!(await stillCanMount())) return;
     let loaded: {
       dataset: NormalizedDataset;
       result: DataRefreshResult;
@@ -460,6 +471,7 @@ async function openTraining(): Promise<void> {
         : "failed";
     refreshToggle();
   } finally {
+    openInFlight = false;
     if (toggle) toggle.disabled = false;
   }
 }
@@ -521,10 +533,8 @@ async function processPage(): Promise<void> {
   if (trainingHost) {
     trainingHost.dataset.theme = detectDarkTheme() ? "dark" : "light";
   }
-  if (decision.restore && !restoreAttempt) {
-    restoreAttempt = openTraining().finally(() => {
-      restoreAttempt = null;
-    });
+  if (shouldQueueRestore(decision.restore, openInFlight)) {
+    void openTraining();
   }
 }
 

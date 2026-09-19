@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { STATUS_SESSION_PREFIX } from "../src/shared/config";
 import {
   DEFAULT_TRAINING_SESSION,
+  canBeginOpenTraining,
   isProblemPage,
   isProblemsetHome,
   nextSession,
@@ -12,6 +13,7 @@ import {
   sessionWriteFromStorage,
   shouldInvalidateStatusCache,
   shouldMountTraining,
+  shouldQueueRestore,
   statusCacheKeyPrefix,
   storedSessionRestore,
   toggleClickAction,
@@ -254,5 +256,22 @@ describe("storedSessionRestore", () => {
       unmount: false,
       restore: false
     });
+  });
+});
+
+describe("canBeginOpenTraining", () => {
+  it("blocks a second open while a click-to-open is already in flight", () => {
+    expect(canBeginOpenTraining(false, "/problemset/", false)).toBe(true);
+    expect(canBeginOpenTraining(true, "/problemset/", false)).toBe(false);
+    expect(canBeginOpenTraining(false, "/problemset/", true)).toBe(false);
+    expect(canBeginOpenTraining(false, "/problems/two-sum", false)).toBe(false);
+  });
+});
+
+describe("shouldQueueRestore", () => {
+  it("does not queue restore when click-to-open already claimed the in-flight slot", () => {
+    expect(shouldQueueRestore(true, false)).toBe(true);
+    expect(shouldQueueRestore(true, true)).toBe(false);
+    expect(shouldQueueRestore(false, false)).toBe(false);
   });
 });
