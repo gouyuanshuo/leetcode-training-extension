@@ -2,15 +2,21 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode
 } from "react";
-import { FILTER_STORAGE_KEY } from "../shared/config";
+import { FILTER_STORAGE_KEY, SESSION_STORAGE_KEY } from "../shared/config";
 import {
   DEFAULT_FILTER_STATE,
   filterAndSortProblems
 } from "../shared/filters";
 import { t } from "../shared/i18n";
+import {
+  nextSession,
+  normalizeSession,
+  pageAfterFilterUpdate
+} from "../shared/trainingSession";
 import type {
   DataRefreshResult,
   FilterState,
@@ -44,6 +50,7 @@ const RATING_BUCKETS: Array<{
 
 interface TrainingAppProps {
   initialDataset: NormalizedDataset;
+  initialPage: number;
   locale: Locale;
   siteOrigin: string;
   initialWarnings: string[];
@@ -183,6 +190,7 @@ function SortHeader({
 
 export function TrainingApp({
   initialDataset,
+  initialPage,
   locale,
   siteOrigin,
   initialWarnings,
@@ -201,7 +209,10 @@ export function TrainingApp({
   const [notice, setNotice] = useState(
     initialWarnings.length ? t(locale, "staleCache") : ""
   );
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(() =>
+    pageAfterFilterUpdate(true, initialPage)
+  );
+  const filtersHydrated = useRef(false);
 
   useEffect(() => {
     void chrome.storage.local.get(FILTER_STORAGE_KEY).then((stored) => {
@@ -215,7 +226,12 @@ export function TrainingApp({
     if (filtersLoaded) {
       void chrome.storage.local.set({ [FILTER_STORAGE_KEY]: filters });
     }
-    setPage(1);
+    if (!filtersLoaded) return;
+    if (!filtersHydrated.current) {
+      filtersHydrated.current = true;
+      return;
+    }
+    setPage(pageAfterFilterUpdate(false, page));
   }, [filters, filtersLoaded]);
 
   const syncStatus = useCallback(
@@ -267,6 +283,16 @@ export function TrainingApp({
   useEffect(() => {
     if (page > pageCount) setPage(pageCount);
   }, [page, pageCount]);
+
+  useEffect(() => {
+    if (!filtersLoaded) return;
+    void chrome.storage.local.get(SESSION_STORAGE_KEY).then((stored) => {
+      const session = normalizeSession(stored[SESSION_STORAGE_KEY]);
+      const next = nextSession(session, { type: "page-change", page });
+      if (next.page === session.page && next.active === session.active) return;
+      void chrome.storage.local.set({ [SESSION_STORAGE_KEY]: next });
+    });
+  }, [page, filtersLoaded]);
 
   const updateFilter = <K extends keyof FilterState>(
     key: K,

@@ -43,6 +43,13 @@ export function normalizeSession(raw: unknown): TrainingSession {
   };
 }
 
+export function pageAfterFilterUpdate(
+  isHydration: boolean,
+  restoredPage: number
+): number {
+  return isHydration ? restoredPage : 1;
+}
+
 export function nextSession(
   state: TrainingSession,
   event: SessionEvent

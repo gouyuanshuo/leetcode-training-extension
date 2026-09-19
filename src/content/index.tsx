@@ -341,6 +341,7 @@ async function openTraining(): Promise<void> {
     trainingRoot.render(
       <TrainingApp
         initialDataset={loaded.dataset}
+        initialPage={1}
         initialWarnings={loaded.result.warnings}
         locale={localeForHost(location.hostname)}
         siteOrigin={location.origin}

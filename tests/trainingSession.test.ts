@@ -6,6 +6,7 @@ import {
   isProblemsetHome,
   nextSession,
   normalizeSession,
+  pageAfterFilterUpdate,
   selectStatusCacheKeys,
   shouldInvalidateStatusCache,
   statusCacheKeyPrefix,
@@ -140,5 +141,12 @@ describe("toggle", () => {
     expect(toggleClickAction(false, false)).toBe("open");
     expect(toggleClickAction(true, false)).toBe("exit");
     expect(toggleClickAction(true, true)).toBe("exit");
+  });
+});
+
+describe("pageAfterFilterUpdate", () => {
+  it("keeps the restored page on the first hydrate, then resets to 1", () => {
+    expect(pageAfterFilterUpdate(true, 2)).toBe(2);
+    expect(pageAfterFilterUpdate(false, 2)).toBe(1);
   });
 });
