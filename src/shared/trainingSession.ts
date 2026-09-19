@@ -67,6 +67,18 @@ export function nextSession(
   }
 }
 
+export function pagePersistWrite(
+  cancelled: boolean,
+  raw: unknown,
+  page: number
+): TrainingSession | null {
+  if (cancelled) return null;
+  const session = normalizeSession(raw);
+  const next = nextSession(session, { type: "page-change", page });
+  if (next.page === session.page && next.active === session.active) return null;
+  return next;
+}
+
 export function statusCacheKeyPrefix(host: string): string {
   return `${STATUS_SESSION_PREFIX}:${host}:`;
 }

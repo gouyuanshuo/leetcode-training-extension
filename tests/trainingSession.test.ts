@@ -7,6 +7,7 @@ import {
   nextSession,
   normalizeSession,
   pageAfterFilterUpdate,
+  pagePersistWrite,
   selectStatusCacheKeys,
   shouldInvalidateStatusCache,
   statusCacheKeyPrefix,
@@ -148,5 +149,25 @@ describe("pageAfterFilterUpdate", () => {
   it("keeps the restored page on the first hydrate, then resets to 1", () => {
     expect(pageAfterFilterUpdate(true, 2)).toBe(2);
     expect(pageAfterFilterUpdate(false, 2)).toBe(1);
+  });
+});
+
+describe("pagePersistWrite", () => {
+  it("does not write after unmount even if get resolved with an active session", () => {
+    expect(
+      pagePersistWrite(true, { active: true, page: 2 }, 3)
+    ).toBeNull();
+  });
+
+  it("writes page-change while mounted and active", () => {
+    expect(
+      pagePersistWrite(false, { active: true, page: 2 }, 3)
+    ).toEqual({ active: true, page: 3 });
+  });
+
+  it("does not write when the fresh snapshot is inactive", () => {
+    expect(
+      pagePersistWrite(false, { active: false, page: 1 }, 3)
+    ).toBeNull();
   });
 });

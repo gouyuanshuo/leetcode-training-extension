@@ -13,9 +13,8 @@ import {
 } from "../shared/filters";
 import { t } from "../shared/i18n";
 import {
-  nextSession,
-  normalizeSession,
-  pageAfterFilterUpdate
+  pageAfterFilterUpdate,
+  pagePersistWrite
 } from "../shared/trainingSession";
 import type {
   DataRefreshResult,
@@ -286,12 +285,19 @@ export function TrainingApp({
 
   useEffect(() => {
     if (!filtersLoaded) return;
+    let cancelled = false;
     void chrome.storage.local.get(SESSION_STORAGE_KEY).then((stored) => {
-      const session = normalizeSession(stored[SESSION_STORAGE_KEY]);
-      const next = nextSession(session, { type: "page-change", page });
-      if (next.page === session.page && next.active === session.active) return;
+      const next = pagePersistWrite(
+        cancelled,
+        stored[SESSION_STORAGE_KEY],
+        page
+      );
+      if (!next) return;
       void chrome.storage.local.set({ [SESSION_STORAGE_KEY]: next });
     });
+    return () => {
+      cancelled = true;
+    };
   }, [page, filtersLoaded]);
 
   const updateFilter = <K extends keyof FilterState>(
