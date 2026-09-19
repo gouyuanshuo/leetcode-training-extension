@@ -116,6 +116,7 @@ Add-on → `dist/manifest.json`. Unsigned add-ons do not survive a full quit.
 | `tests/pageStatusSync.test.ts` | GraphQL status mapping / paging |
 | `tests/problemMatcher.test.ts` | href / row matching |
 | `tests/studyData.test.ts` | 12 plans, heading translations, ≥2000 problem ids |
+| `tests/trainingSession.test.ts` | session paths, restore vs hard-fail, toggle/exit, status cache keys |
 | `scripts/validate-manifest.mjs` | MV3, permission set, host allowlist |
 
 A change to filter math, status strings, or the manifest must update the

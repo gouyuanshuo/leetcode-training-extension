@@ -11,13 +11,15 @@ import {
   canBeginOpenTraining,
   isProblemsetHome,
   normalizeSession,
-  sessionWriteFromStorage,
+  sessionPersistWrite,
   shouldMountTraining,
+  shouldPersistOpenWrite,
   shouldQueueRestore,
   storedSessionRestore,
   toggleClickAction,
   toggleMessageKey,
   urlChangeSteps,
+  type OpenTrainingTrigger,
   type ToggleDatasetState
 } from "../shared/trainingSession";
 import type {
@@ -95,10 +97,12 @@ async function readSession() {
 }
 
 async function writeSession(
-  event: Parameters<typeof sessionWriteFromStorage>[1]
+  event: Parameters<typeof sessionPersistWrite>[1]
 ) {
   const stored = await chrome.storage.local.get(SESSION_STORAGE_KEY);
-  session = sessionWriteFromStorage(stored[SESSION_STORAGE_KEY], event);
+  const next = sessionPersistWrite(stored[SESSION_STORAGE_KEY], event);
+  session = next ?? normalizeSession(stored[SESSION_STORAGE_KEY]);
+  if (!next) return;
   await chrome.storage.local.set({ [SESSION_STORAGE_KEY]: session });
 }
 
@@ -389,7 +393,7 @@ async function applyUrlChange(): Promise<void> {
   currentUrl = next;
 }
 
-async function openTraining(): Promise<void> {
+async function openTraining(trigger: OpenTrainingTrigger): Promise<void> {
   if (
     !canBeginOpenTraining(
       openInFlight,
@@ -400,10 +404,10 @@ async function openTraining(): Promise<void> {
     return;
   }
   openInFlight = true;
-  const toggle = document.getElementById(TOGGLE_ID) as HTMLButtonElement | null;
-  if (toggle) toggle.disabled = true;
   try {
-    await writeSession({ type: "open" });
+    if (shouldPersistOpenWrite(trigger)) {
+      await writeSession({ type: "open" });
+    }
     if (!(await stillCanMount())) return;
     let loaded: {
       dataset: NormalizedDataset;
@@ -472,7 +476,6 @@ async function openTraining(): Promise<void> {
     refreshToggle();
   } finally {
     openInFlight = false;
-    if (toggle) toggle.disabled = false;
   }
 }
 
@@ -508,7 +511,7 @@ function ensureToggle(): void {
         await readSession();
         const action = toggleClickAction(session.active, Boolean(trainingHost));
         if (action === "exit") await exitTraining();
-        else await openTraining();
+        else await openTraining("click");
       })();
     });
     document.body.append(button);
@@ -533,8 +536,8 @@ async function processPage(): Promise<void> {
   if (trainingHost) {
     trainingHost.dataset.theme = detectDarkTheme() ? "dark" : "light";
   }
-  if (shouldQueueRestore(decision.restore, openInFlight)) {
-    void openTraining();
+  if (shouldQueueRestore(decision.restore, openInFlight, datasetState)) {
+    void openTraining("restore");
   }
 }
 

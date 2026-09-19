@@ -10,9 +10,11 @@ import {
   pageAfterFilterUpdate,
   pagePersistWrite,
   selectStatusCacheKeys,
+  sessionPersistWrite,
   sessionWriteFromStorage,
   shouldInvalidateStatusCache,
   shouldMountTraining,
+  shouldPersistOpenWrite,
   shouldQueueRestore,
   statusCacheKeyPrefix,
   storedSessionRestore,
@@ -270,8 +272,34 @@ describe("canBeginOpenTraining", () => {
 
 describe("shouldQueueRestore", () => {
   it("does not queue restore when click-to-open already claimed the in-flight slot", () => {
-    expect(shouldQueueRestore(true, false)).toBe(true);
-    expect(shouldQueueRestore(true, true)).toBe(false);
-    expect(shouldQueueRestore(false, false)).toBe(false);
+    expect(shouldQueueRestore(true, false, "ready")).toBe(true);
+    expect(shouldQueueRestore(true, true, "ready")).toBe(false);
+    expect(shouldQueueRestore(false, false, "ready")).toBe(false);
+  });
+
+  it("does not retry restore after a dataset hard-fail", () => {
+    expect(shouldQueueRestore(true, false, "failed")).toBe(false);
+    expect(shouldQueueRestore(true, false, "loading")).toBe(true);
+  });
+});
+
+describe("shouldPersistOpenWrite", () => {
+  it("writes open only from the click path, not restore", () => {
+    expect(shouldPersistOpenWrite("click")).toBe(true);
+    expect(shouldPersistOpenWrite("restore")).toBe(false);
+  });
+});
+
+describe("sessionPersistWrite", () => {
+  it("skips storage when open is applied to an already-active snapshot", () => {
+    expect(
+      sessionPersistWrite({ active: true, page: 2 }, { type: "open" })
+    ).toBeNull();
+  });
+
+  it("writes open when the stored snapshot is inactive", () => {
+    expect(
+      sessionPersistWrite({ active: false, page: 2 }, { type: "open" })
+    ).toEqual({ active: true, page: 2 });
   });
 });

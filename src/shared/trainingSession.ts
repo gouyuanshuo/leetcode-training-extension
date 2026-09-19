@@ -15,6 +15,8 @@ export type SessionEvent =
 
 export type ToggleDatasetState = "ready" | "loading" | "failed";
 
+export type OpenTrainingTrigger = "click" | "restore";
+
 export function isProblemsetHome(pathname: string): boolean {
   return /^\/problemset\/?$/.test(pathname);
 }
@@ -116,6 +118,20 @@ export function sessionWriteFromStorage(
   return nextSession(normalizeSession(raw), event);
 }
 
+export function sessionPersistWrite(
+  raw: unknown,
+  event: SessionEvent
+): TrainingSession | null {
+  const current = normalizeSession(raw);
+  const next = nextSession(current, event);
+  if (next.active === current.active && next.page === current.page) return null;
+  return next;
+}
+
+export function shouldPersistOpenWrite(trigger: OpenTrainingTrigger): boolean {
+  return trigger === "click";
+}
+
 export function urlChangeSteps(
   prevPathname: string,
   nextPathname: string
@@ -165,7 +181,8 @@ export function canBeginOpenTraining(
 
 export function shouldQueueRestore(
   restore: boolean,
-  inFlight: boolean
+  inFlight: boolean,
+  datasetState: ToggleDatasetState
 ): boolean {
-  return restore && !inFlight;
+  return restore && !inFlight && datasetState !== "failed";
 }
