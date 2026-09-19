@@ -108,3 +108,49 @@ export function toggleClickAction(
 ): "open" | "exit" {
   return active || mounted ? "exit" : "open";
 }
+
+export function sessionWriteFromStorage(
+  raw: unknown,
+  event: SessionEvent
+): TrainingSession {
+  return nextSession(normalizeSession(raw), event);
+}
+
+export function urlChangeSteps(
+  prevPathname: string,
+  nextPathname: string
+): Array<"invalidate" | "unmount"> {
+  const steps: Array<"invalidate" | "unmount"> = [];
+  if (shouldInvalidateStatusCache(prevPathname, nextPathname)) {
+    steps.push("invalidate");
+  }
+  if (!isProblemsetHome(nextPathname)) {
+    steps.push("unmount");
+  }
+  return steps;
+}
+
+export function shouldMountTraining(
+  pathname: string,
+  active: boolean,
+  mounted: boolean
+): boolean {
+  return isProblemsetHome(pathname) && active && !mounted;
+}
+
+export function storedSessionRestore(
+  pathname: string,
+  raw: unknown,
+  mounted: boolean
+): {
+  session: TrainingSession;
+  unmount: boolean;
+  restore: boolean;
+} {
+  const session = normalizeSession(raw);
+  return {
+    session,
+    unmount: !session.active && mounted,
+    restore: shouldMountTraining(pathname, session.active, mounted)
+  };
+}

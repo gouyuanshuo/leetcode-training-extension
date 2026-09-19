@@ -9,10 +9,14 @@ import {
   pageAfterFilterUpdate,
   pagePersistWrite,
   selectStatusCacheKeys,
+  sessionWriteFromStorage,
   shouldInvalidateStatusCache,
+  shouldMountTraining,
   statusCacheKeyPrefix,
+  storedSessionRestore,
   toggleClickAction,
-  toggleMessageKey
+  toggleMessageKey,
+  urlChangeSteps
 } from "../src/shared/trainingSession";
 
 describe("isProblemsetHome", () => {
@@ -169,5 +173,86 @@ describe("pagePersistWrite", () => {
     expect(
       pagePersistWrite(false, { active: false, page: 1 }, 3)
     ).toBeNull();
+  });
+});
+
+describe("sessionWriteFromStorage", () => {
+  it("applies open to the stored snapshot so a stale in-memory page is not written", () => {
+    const staleMemory = { active: true, page: 1 };
+    const stored = { active: true, page: 2 };
+    expect(nextSession(staleMemory, { type: "open" })).toEqual({
+      active: true,
+      page: 1
+    });
+    expect(sessionWriteFromStorage(stored, { type: "open" })).toEqual({
+      active: true,
+      page: 2
+    });
+  });
+});
+
+describe("urlChangeSteps", () => {
+  it("invalidates before restore when leaving a problem for problemset", () => {
+    expect(urlChangeSteps("/problems/two-sum", "/problemset/")).toEqual([
+      "invalidate"
+    ]);
+    expect(
+      urlChangeSteps("/problems/two-sum/solutions", "/problemset/")
+    ).toEqual(["invalidate"]);
+  });
+
+  it("unmounts without invalidating when leaving problemset for a problem", () => {
+    expect(urlChangeSteps("/problemset/", "/problems/two-sum")).toEqual([
+      "unmount"
+    ]);
+  });
+
+  it("invalidates before unmount when leaving a problem for a non-problemset page", () => {
+    expect(urlChangeSteps("/problems/two-sum", "/contest/")).toEqual([
+      "invalidate",
+      "unmount"
+    ]);
+  });
+});
+
+describe("shouldMountTraining", () => {
+  it("requires problemset home, an active session, and no existing host", () => {
+    expect(shouldMountTraining("/problemset/", true, false)).toBe(true);
+    expect(shouldMountTraining("/problemset", true, false)).toBe(true);
+    expect(shouldMountTraining("/problems/two-sum", true, false)).toBe(false);
+    expect(shouldMountTraining("/problemset/", false, false)).toBe(false);
+    expect(shouldMountTraining("/problemset/", true, true)).toBe(false);
+  });
+});
+
+describe("storedSessionRestore", () => {
+  it("unmounts when storage is inactive even if this tab still has a host", () => {
+    expect(
+      storedSessionRestore("/problemset/", { active: false, page: 1 }, true)
+    ).toEqual({
+      session: { active: false, page: 1 },
+      unmount: true,
+      restore: false
+    });
+  });
+
+  it("restores when storage is active, home, and unmounted", () => {
+    expect(
+      storedSessionRestore("/problemset/", { active: true, page: 2 }, false)
+    ).toEqual({
+      session: { active: true, page: 2 },
+      unmount: false,
+      restore: true
+    });
+  });
+
+  it("does not restore off problemset home", () => {
+    expect(
+      storedSessionRestore("/problems/two-sum", { active: true, page: 2 }, false)
+    ).toEqual({
+      session: { active: true, page: 2 },
+      unmount: false,
+      restore: false
+    });
   });
 });

@@ -9,11 +9,13 @@ import { DATA_STORAGE_KEY, SESSION_STORAGE_KEY } from "../shared/config";
 import { localeForHost, t } from "../shared/i18n";
 import {
   isProblemsetHome,
-  nextSession,
   normalizeSession,
-  shouldInvalidateStatusCache,
+  sessionWriteFromStorage,
+  shouldMountTraining,
+  storedSessionRestore,
   toggleClickAction,
   toggleMessageKey,
+  urlChangeSteps,
   type ToggleDatasetState
 } from "../shared/trainingSession";
 import type {
@@ -40,6 +42,7 @@ let scheduled = false;
 let session = normalizeSession(undefined);
 let datasetState: ToggleDatasetState = "loading";
 let restoreAttempt: Promise<void> | null = null;
+let processChain: Promise<void> = Promise.resolve();
 
 function sendMessage<T>(request: BackgroundRequest): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -89,8 +92,11 @@ async function readSession() {
   return session;
 }
 
-async function writeSession(event: Parameters<typeof nextSession>[1]) {
-  session = nextSession(session, event);
+async function writeSession(
+  event: Parameters<typeof sessionWriteFromStorage>[1]
+) {
+  const stored = await chrome.storage.local.get(SESSION_STORAGE_KEY);
+  session = sessionWriteFromStorage(stored[SESSION_STORAGE_KEY], event);
   await chrome.storage.local.set({ [SESSION_STORAGE_KEY]: session });
 }
 
@@ -344,9 +350,47 @@ async function exitTraining(): Promise<void> {
   refreshToggle();
 }
 
+async function stillCanMount(): Promise<boolean> {
+  await readSession();
+  if (
+    shouldMountTraining(
+      location.pathname,
+      session.active,
+      Boolean(trainingHost)
+    )
+  ) {
+    return true;
+  }
+  refreshToggle();
+  return false;
+}
+
+async function applyUrlChange(): Promise<void> {
+  if (location.href === currentUrl) return;
+  const previous = currentUrl;
+  const next = location.href;
+  const steps = urlChangeSteps(pathnameOf(previous), pathnameOf(next));
+  for (const step of steps) {
+    if (step === "invalidate") {
+      try {
+        await sendMessage({ type: "INVALIDATE_STATUS" });
+      } catch (error) {
+        console.warn(
+          "[LeetCode Training] Unable to invalidate status cache",
+          error
+        );
+      }
+    } else {
+      closeTraining();
+    }
+  }
+  currentUrl = next;
+}
+
 async function openTraining(): Promise<void> {
   if (trainingHost || !isProblemsetHome(location.pathname)) return;
   await writeSession({ type: "open" });
+  if (!(await stillCanMount())) return;
   const toggle = document.getElementById(TOGGLE_ID) as HTMLButtonElement | null;
   if (toggle) toggle.disabled = true;
   try {
@@ -369,6 +413,7 @@ async function openTraining(): Promise<void> {
       refreshToggle();
       loaded = await ensureDataset(false);
     }
+    if (!(await stillCanMount())) return;
     const nativeList = findNativeProblemList();
     if (!nativeList) throw new Error("Could not locate the native problem list");
 
@@ -447,28 +492,36 @@ function ensureToggle(): void {
       cursor: "pointer"
     });
     button.addEventListener("click", () => {
-      const action = toggleClickAction(session.active, Boolean(trainingHost));
-      if (action === "exit") void exitTraining();
-      else void openTraining();
+      void (async () => {
+        await readSession();
+        const action = toggleClickAction(session.active, Boolean(trainingHost));
+        if (action === "exit") await exitTraining();
+        else await openTraining();
+      })();
     });
     document.body.append(button);
   }
   refreshToggle();
 }
 
-function processPage(): void {
+async function processPage(): Promise<void> {
+  await applyUrlChange();
+  const stored = await chrome.storage.local.get(SESSION_STORAGE_KEY);
+  await applyUrlChange();
+  const decision = storedSessionRestore(
+    location.pathname,
+    stored[SESSION_STORAGE_KEY],
+    Boolean(trainingHost)
+  );
+  session = decision.session;
+  if (decision.unmount) closeTraining();
   ensureToggle();
   decorateNativeRatings();
   decorateProblemPage();
   if (trainingHost) {
     trainingHost.dataset.theme = detectDarkTheme() ? "dark" : "light";
   }
-  if (
-    isProblemsetHome(location.pathname) &&
-    session.active &&
-    !trainingHost &&
-    !restoreAttempt
-  ) {
+  if (decision.restore && !restoreAttempt) {
     restoreAttempt = openTraining().finally(() => {
       restoreAttempt = null;
     });
@@ -480,7 +533,11 @@ function scheduleProcess(): void {
   scheduled = true;
   window.setTimeout(() => {
     scheduled = false;
-    processPage();
+    processChain = processChain
+      .then(() => processPage())
+      .catch((error) => {
+        console.warn("[LeetCode Training] Unable to process page", error);
+      });
   }, 120);
 }
 
@@ -492,18 +549,12 @@ observer.observe(document.documentElement, {
 
 window.setInterval(() => {
   if (location.href === currentUrl) return;
-  const previous = currentUrl;
-  currentUrl = location.href;
-  const prevPath = pathnameOf(previous);
-  const nextPath = pathnameOf(currentUrl);
-  if (shouldInvalidateStatusCache(prevPath, nextPath)) {
-    void sendMessage({ type: "INVALIDATE_STATUS" });
-  }
-  if (!isProblemsetHome(nextPath)) {
-    closeTraining();
-  }
   scheduleProcess();
 }, 400);
+
+chrome.storage.local.onChanged.addListener((changes) => {
+  if (SESSION_STORAGE_KEY in changes) scheduleProcess();
+});
 
 void readSession().then(() => {
   scheduleProcess();
