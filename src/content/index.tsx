@@ -5,8 +5,17 @@ import {
   problemFromHref,
   problemNearElement
 } from "./problemMatcher";
-import { DATA_STORAGE_KEY } from "../shared/config";
+import { DATA_STORAGE_KEY, SESSION_STORAGE_KEY } from "../shared/config";
 import { localeForHost, t } from "../shared/i18n";
+import {
+  isProblemsetHome,
+  nextSession,
+  normalizeSession,
+  shouldInvalidateStatusCache,
+  toggleClickAction,
+  toggleMessageKey,
+  type ToggleDatasetState
+} from "../shared/trainingSession";
 import type {
   BackgroundRequest,
   DataRefreshResult,
@@ -28,6 +37,9 @@ let hiddenNativeList: HTMLElement | null = null;
 let hiddenNativeDisplay = "";
 let currentUrl = location.href;
 let scheduled = false;
+let session = normalizeSession(undefined);
+let datasetState: ToggleDatasetState = "loading";
+let restoreAttempt: Promise<void> | null = null;
 
 function sendMessage<T>(request: BackgroundRequest): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -71,8 +83,33 @@ async function ensureDataset(force = false): Promise<{
   return { dataset: loaded, result };
 }
 
-function isProblemsetHome(): boolean {
-  return /^\/problemset\/?$/.test(location.pathname);
+async function readSession() {
+  const stored = await chrome.storage.local.get(SESSION_STORAGE_KEY);
+  session = normalizeSession(stored[SESSION_STORAGE_KEY]);
+  return session;
+}
+
+async function writeSession(event: Parameters<typeof nextSession>[1]) {
+  session = nextSession(session, event);
+  await chrome.storage.local.set({ [SESSION_STORAGE_KEY]: session });
+}
+
+function pathnameOf(href: string): string {
+  try {
+    return new URL(href, location.origin).pathname;
+  } catch {
+    return "";
+  }
+}
+
+function refreshToggle(): void {
+  const toggle = document.getElementById(TOGGLE_ID) as HTMLButtonElement | null;
+  if (!toggle) return;
+  const locale = localeForHost(location.hostname);
+  toggle.textContent = t(
+    locale,
+    toggleMessageKey(session.active, Boolean(trainingHost), datasetState)
+  );
 }
 
 function ratingColor(rating: number): string {
@@ -294,32 +331,44 @@ function closeTraining(): void {
   trainingRoot = null;
   trainingHost?.remove();
   trainingHost = null;
-  if (hiddenNativeList) {
+  if (hiddenNativeList?.isConnected) {
     hiddenNativeList.style.display = hiddenNativeDisplay;
   }
   hiddenNativeList = null;
-  const toggle = document.getElementById(TOGGLE_ID);
-  if (toggle) toggle.textContent = t(localeForHost(location.hostname), "trainingMode");
+  refreshToggle();
+}
+
+async function exitTraining(): Promise<void> {
+  closeTraining();
+  await writeSession({ type: "exit" });
+  refreshToggle();
 }
 
 async function openTraining(): Promise<void> {
-  if (trainingHost || !isProblemsetHome()) return;
+  if (trainingHost || !isProblemsetHome(location.pathname)) return;
+  await writeSession({ type: "open" });
   const toggle = document.getElementById(TOGGLE_ID) as HTMLButtonElement | null;
-  if (toggle) {
-    toggle.disabled = true;
-    toggle.textContent = t(localeForHost(location.hostname), "loading");
-  }
+  if (toggle) toggle.disabled = true;
   try {
-    const loaded = dataset
-      ? {
-          dataset,
-          result: {
-            datasetAvailable: true,
-            refreshed: [],
-            warnings: dataWarnings
-          } satisfies DataRefreshResult
-        }
-      : await ensureDataset(false);
+    let loaded: {
+      dataset: NormalizedDataset;
+      result: DataRefreshResult;
+    };
+    if (dataset) {
+      datasetState = "ready";
+      loaded = {
+        dataset,
+        result: {
+          datasetAvailable: true,
+          refreshed: [],
+          warnings: dataWarnings
+        } satisfies DataRefreshResult
+      };
+    } else {
+      datasetState = "loading";
+      refreshToggle();
+      loaded = await ensureDataset(false);
+    }
     const nativeList = findNativeProblemList();
     if (!nativeList) throw new Error("Could not locate the native problem list");
 
@@ -341,61 +390,70 @@ async function openTraining(): Promise<void> {
     trainingRoot.render(
       <TrainingApp
         initialDataset={loaded.dataset}
-        initialPage={1}
+        initialPage={session.page}
         initialWarnings={loaded.result.warnings}
         locale={localeForHost(location.hostname)}
         siteOrigin={location.origin}
-        onClose={closeTraining}
+        onClose={() => {
+          void exitTraining();
+        }}
         onRefresh={() => ensureDataset(true)}
         onSyncStatus={(force) =>
           sendMessage<StatusSyncResult>({ type: "SYNC_STATUS", force })
         }
       />
     );
-    if (toggle) toggle.textContent = t(localeForHost(location.hostname), "closeTraining");
+    datasetState = "ready";
+    refreshToggle();
   } catch (error) {
     console.warn("[LeetCode Training] Unable to open training mode", error);
     closeTraining();
-    if (toggle) toggle.textContent = t(localeForHost(location.hostname), "loadFailed");
+    const message = error instanceof Error ? error.message : String(error);
+    datasetState =
+      message === "Could not locate the native problem list"
+        ? "loading"
+        : "failed";
+    refreshToggle();
   } finally {
     if (toggle) toggle.disabled = false;
   }
 }
 
 function ensureToggle(): void {
-  const existing = document.getElementById(TOGGLE_ID) as HTMLButtonElement | null;
-  if (!isProblemsetHome()) {
-    existing?.remove();
+  if (!isProblemsetHome(location.pathname)) {
+    document.getElementById(TOGGLE_ID)?.remove();
     closeTraining();
     return;
   }
-  if (existing) return;
 
-  const locale = localeForHost(location.hostname);
-  const button = document.createElement("button");
-  button.id = TOGGLE_ID;
-  button.type = "button";
-  button.textContent = t(locale, "trainingMode");
-  Object.assign(button.style, {
-    position: "fixed",
-    right: "22px",
-    bottom: "22px",
-    zIndex: "2147483000",
-    border: "0",
-    borderRadius: "999px",
-    padding: "10px 16px",
-    color: "#fff",
-    background: "#ffa116",
-    boxShadow: "0 6px 20px rgba(0,0,0,.24)",
-    fontSize: "14px",
-    fontWeight: "600",
-    cursor: "pointer"
-  });
-  button.addEventListener("click", () => {
-    if (trainingHost) closeTraining();
-    else void openTraining();
-  });
-  document.body.append(button);
+  let button = document.getElementById(TOGGLE_ID) as HTMLButtonElement | null;
+  if (!button) {
+    button = document.createElement("button");
+    button.id = TOGGLE_ID;
+    button.type = "button";
+    Object.assign(button.style, {
+      position: "fixed",
+      right: "22px",
+      bottom: "22px",
+      zIndex: "2147483000",
+      border: "0",
+      borderRadius: "999px",
+      padding: "10px 16px",
+      color: "#fff",
+      background: "#ffa116",
+      boxShadow: "0 6px 20px rgba(0,0,0,.24)",
+      fontSize: "14px",
+      fontWeight: "600",
+      cursor: "pointer"
+    });
+    button.addEventListener("click", () => {
+      const action = toggleClickAction(session.active, Boolean(trainingHost));
+      if (action === "exit") void exitTraining();
+      else void openTraining();
+    });
+    document.body.append(button);
+  }
+  refreshToggle();
 }
 
 function processPage(): void {
@@ -404,6 +462,16 @@ function processPage(): void {
   decorateProblemPage();
   if (trainingHost) {
     trainingHost.dataset.theme = detectDarkTheme() ? "dark" : "light";
+  }
+  if (
+    isProblemsetHome(location.pathname) &&
+    session.active &&
+    !trainingHost &&
+    !restoreAttempt
+  ) {
+    restoreAttempt = openTraining().finally(() => {
+      restoreAttempt = null;
+    });
   }
 }
 
@@ -423,16 +491,29 @@ observer.observe(document.documentElement, {
 });
 
 window.setInterval(() => {
-  if (location.href !== currentUrl) {
-    currentUrl = location.href;
-    closeTraining();
-    scheduleProcess();
+  if (location.href === currentUrl) return;
+  const previous = currentUrl;
+  currentUrl = location.href;
+  const prevPath = pathnameOf(previous);
+  const nextPath = pathnameOf(currentUrl);
+  if (shouldInvalidateStatusCache(prevPath, nextPath)) {
+    void sendMessage({ type: "INVALIDATE_STATUS" });
   }
+  if (!isProblemsetHome(nextPath)) {
+    closeTraining();
+  }
+  scheduleProcess();
 }, 400);
 
-scheduleProcess();
+void readSession().then(() => {
+  scheduleProcess();
+});
 void ensureDataset(false)
+  .then(() => {
+    datasetState = "ready";
+  })
   .catch((error) => {
     console.warn("[LeetCode Training] Initial data update failed", error);
+    if (!dataset) datasetState = "failed";
   })
   .finally(scheduleProcess);
