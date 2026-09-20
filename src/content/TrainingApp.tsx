@@ -2,15 +2,20 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode
 } from "react";
-import { FILTER_STORAGE_KEY } from "../shared/config";
+import { FILTER_STORAGE_KEY, SESSION_STORAGE_KEY } from "../shared/config";
 import {
   DEFAULT_FILTER_STATE,
   filterAndSortProblems
 } from "../shared/filters";
 import { t } from "../shared/i18n";
+import {
+  pageAfterFilterUpdate,
+  pagePersistWrite
+} from "../shared/trainingSession";
 import type {
   DataRefreshResult,
   FilterState,
@@ -44,6 +49,7 @@ const RATING_BUCKETS: Array<{
 
 interface TrainingAppProps {
   initialDataset: NormalizedDataset;
+  initialPage: number;
   locale: Locale;
   siteOrigin: string;
   initialWarnings: string[];
@@ -183,6 +189,7 @@ function SortHeader({
 
 export function TrainingApp({
   initialDataset,
+  initialPage,
   locale,
   siteOrigin,
   initialWarnings,
@@ -201,7 +208,10 @@ export function TrainingApp({
   const [notice, setNotice] = useState(
     initialWarnings.length ? t(locale, "staleCache") : ""
   );
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(() =>
+    pageAfterFilterUpdate(true, initialPage)
+  );
+  const filtersHydrated = useRef(false);
 
   useEffect(() => {
     void chrome.storage.local.get(FILTER_STORAGE_KEY).then((stored) => {
@@ -215,7 +225,12 @@ export function TrainingApp({
     if (filtersLoaded) {
       void chrome.storage.local.set({ [FILTER_STORAGE_KEY]: filters });
     }
-    setPage(1);
+    if (!filtersLoaded) return;
+    if (!filtersHydrated.current) {
+      filtersHydrated.current = true;
+      return;
+    }
+    setPage(pageAfterFilterUpdate(false, page));
   }, [filters, filtersLoaded]);
 
   const syncStatus = useCallback(
@@ -267,6 +282,24 @@ export function TrainingApp({
   useEffect(() => {
     if (page > pageCount) setPage(pageCount);
   }, [page, pageCount]);
+
+  useEffect(() => {
+    if (!filtersLoaded) return;
+    let cancelled = false;
+    void (async () => {
+      const stored = await chrome.storage.local.get(SESSION_STORAGE_KEY);
+      if (cancelled) return;
+      if (!pagePersistWrite(false, stored[SESSION_STORAGE_KEY], page)) return;
+      const latest = await chrome.storage.local.get(SESSION_STORAGE_KEY);
+      if (cancelled) return;
+      const write = pagePersistWrite(false, latest[SESSION_STORAGE_KEY], page);
+      if (!write) return;
+      await chrome.storage.local.set({ [SESSION_STORAGE_KEY]: write });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [page, filtersLoaded]);
 
   const updateFilter = <K extends keyof FilterState>(
     key: K,

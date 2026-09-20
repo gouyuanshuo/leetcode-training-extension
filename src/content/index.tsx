@@ -5,8 +5,23 @@ import {
   problemFromHref,
   problemNearElement
 } from "./problemMatcher";
-import { DATA_STORAGE_KEY } from "../shared/config";
+import { DATA_STORAGE_KEY, SESSION_STORAGE_KEY } from "../shared/config";
 import { localeForHost, t } from "../shared/i18n";
+import {
+  canBeginOpenTraining,
+  isProblemsetHome,
+  normalizeSession,
+  sessionPersistWrite,
+  shouldMountTraining,
+  shouldPersistOpenWrite,
+  shouldQueueRestore,
+  storedSessionRestore,
+  toggleClickAction,
+  toggleMessageKey,
+  urlChangeSteps,
+  type OpenTrainingTrigger,
+  type ToggleDatasetState
+} from "../shared/trainingSession";
 import type {
   BackgroundRequest,
   DataRefreshResult,
@@ -28,6 +43,10 @@ let hiddenNativeList: HTMLElement | null = null;
 let hiddenNativeDisplay = "";
 let currentUrl = location.href;
 let scheduled = false;
+let session = normalizeSession(undefined);
+let datasetState: ToggleDatasetState = "loading";
+let openInFlight = false;
+let processChain: Promise<void> = Promise.resolve();
 
 function sendMessage<T>(request: BackgroundRequest): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -71,8 +90,41 @@ async function ensureDataset(force = false): Promise<{
   return { dataset: loaded, result };
 }
 
-function isProblemsetHome(): boolean {
-  return /^\/problemset\/?$/.test(location.pathname);
+async function readSession() {
+  const stored = await chrome.storage.local.get(SESSION_STORAGE_KEY);
+  session = normalizeSession(stored[SESSION_STORAGE_KEY]);
+  return session;
+}
+
+async function writeSession(
+  event: Parameters<typeof sessionPersistWrite>[1]
+) {
+  const stored = await chrome.storage.local.get(SESSION_STORAGE_KEY);
+  const next = sessionPersistWrite(stored[SESSION_STORAGE_KEY], event);
+  session = next ?? normalizeSession(stored[SESSION_STORAGE_KEY]);
+  if (!next) return;
+  await chrome.storage.local.set({ [SESSION_STORAGE_KEY]: session });
+}
+
+function pathnameOf(href: string): string {
+  try {
+    return new URL(href, location.origin).pathname;
+  } catch {
+    return "";
+  }
+}
+
+function refreshToggle(): void {
+  const toggle = document.getElementById(TOGGLE_ID) as HTMLButtonElement | null;
+  if (!toggle) return;
+  const locale = localeForHost(location.hostname);
+  const key = toggleMessageKey(
+    session.active,
+    Boolean(trainingHost),
+    datasetState
+  );
+  toggle.textContent = t(locale, key);
+  toggle.title = key === "retry" ? t(locale, "loadFailed") : "";
 }
 
 function ratingColor(rating: number): string {
@@ -294,32 +346,92 @@ function closeTraining(): void {
   trainingRoot = null;
   trainingHost?.remove();
   trainingHost = null;
-  if (hiddenNativeList) {
+  if (hiddenNativeList?.isConnected) {
     hiddenNativeList.style.display = hiddenNativeDisplay;
   }
   hiddenNativeList = null;
-  const toggle = document.getElementById(TOGGLE_ID);
-  if (toggle) toggle.textContent = t(localeForHost(location.hostname), "trainingMode");
+  refreshToggle();
 }
 
-async function openTraining(): Promise<void> {
-  if (trainingHost || !isProblemsetHome()) return;
-  const toggle = document.getElementById(TOGGLE_ID) as HTMLButtonElement | null;
-  if (toggle) {
-    toggle.disabled = true;
-    toggle.textContent = t(localeForHost(location.hostname), "loading");
+async function exitTraining(): Promise<void> {
+  closeTraining();
+  await writeSession({ type: "exit" });
+  refreshToggle();
+}
+
+async function stillCanMount(): Promise<boolean> {
+  await readSession();
+  if (
+    shouldMountTraining(
+      location.pathname,
+      session.active,
+      Boolean(trainingHost)
+    )
+  ) {
+    return true;
   }
+  refreshToggle();
+  return false;
+}
+
+async function applyUrlChange(): Promise<void> {
+  if (location.href === currentUrl) return;
+  const previous = currentUrl;
+  const next = location.href;
+  const steps = urlChangeSteps(pathnameOf(previous), pathnameOf(next));
+  for (const step of steps) {
+    if (step === "invalidate") {
+      try {
+        await sendMessage({ type: "INVALIDATE_STATUS" });
+      } catch (error) {
+        console.warn(
+          "[LeetCode Training] Unable to invalidate status cache",
+          error
+        );
+      }
+    } else {
+      closeTraining();
+    }
+  }
+  currentUrl = next;
+}
+
+async function openTraining(trigger: OpenTrainingTrigger): Promise<void> {
+  if (
+    !canBeginOpenTraining(
+      openInFlight,
+      location.pathname,
+      Boolean(trainingHost)
+    )
+  ) {
+    return;
+  }
+  openInFlight = true;
   try {
-    const loaded = dataset
-      ? {
-          dataset,
-          result: {
-            datasetAvailable: true,
-            refreshed: [],
-            warnings: dataWarnings
-          } satisfies DataRefreshResult
-        }
-      : await ensureDataset(false);
+    if (shouldPersistOpenWrite(trigger)) {
+      await writeSession({ type: "open" });
+    }
+    if (!(await stillCanMount())) return;
+    let loaded: {
+      dataset: NormalizedDataset;
+      result: DataRefreshResult;
+    };
+    if (dataset) {
+      datasetState = "ready";
+      loaded = {
+        dataset,
+        result: {
+          datasetAvailable: true,
+          refreshed: [],
+          warnings: dataWarnings
+        } satisfies DataRefreshResult
+      };
+    } else {
+      datasetState = "loading";
+      refreshToggle();
+      loaded = await ensureDataset(false);
+    }
+    if (!(await stillCanMount())) return;
     const nativeList = findNativeProblemList();
     if (!nativeList) throw new Error("Could not locate the native problem list");
 
@@ -341,68 +453,102 @@ async function openTraining(): Promise<void> {
     trainingRoot.render(
       <TrainingApp
         initialDataset={loaded.dataset}
+        initialPage={session.page}
         initialWarnings={loaded.result.warnings}
         locale={localeForHost(location.hostname)}
         siteOrigin={location.origin}
-        onClose={closeTraining}
+        onClose={() => {
+          void exitTraining();
+        }}
         onRefresh={() => ensureDataset(true)}
         onSyncStatus={(force) =>
           sendMessage<StatusSyncResult>({ type: "SYNC_STATUS", force })
         }
       />
     );
-    if (toggle) toggle.textContent = t(localeForHost(location.hostname), "closeTraining");
+    datasetState = "ready";
+    refreshToggle();
   } catch (error) {
     console.warn("[LeetCode Training] Unable to open training mode", error);
     closeTraining();
-    if (toggle) toggle.textContent = t(localeForHost(location.hostname), "loadFailed");
+    const message = error instanceof Error ? error.message : String(error);
+    datasetState =
+      message === "Could not locate the native problem list"
+        ? "loading"
+        : "failed";
+    refreshToggle();
   } finally {
-    if (toggle) toggle.disabled = false;
+    openInFlight = false;
   }
 }
 
 function ensureToggle(): void {
-  const existing = document.getElementById(TOGGLE_ID) as HTMLButtonElement | null;
-  if (!isProblemsetHome()) {
-    existing?.remove();
+  if (!isProblemsetHome(location.pathname)) {
+    document.getElementById(TOGGLE_ID)?.remove();
     closeTraining();
     return;
   }
-  if (existing) return;
 
-  const locale = localeForHost(location.hostname);
-  const button = document.createElement("button");
-  button.id = TOGGLE_ID;
-  button.type = "button";
-  button.textContent = t(locale, "trainingMode");
-  Object.assign(button.style, {
-    position: "fixed",
-    right: "22px",
-    bottom: "22px",
-    zIndex: "2147483000",
-    border: "0",
-    borderRadius: "999px",
-    padding: "10px 16px",
-    color: "#fff",
-    background: "#ffa116",
-    boxShadow: "0 6px 20px rgba(0,0,0,.24)",
-    fontSize: "14px",
-    fontWeight: "600",
-    cursor: "pointer"
-  });
-  button.addEventListener("click", () => {
-    if (trainingHost) closeTraining();
-    else void openTraining();
-  });
-  document.body.append(button);
+  let button = document.getElementById(TOGGLE_ID) as HTMLButtonElement | null;
+  if (!button) {
+    button = document.createElement("button");
+    button.id = TOGGLE_ID;
+    button.type = "button";
+    Object.assign(button.style, {
+      position: "fixed",
+      right: "22px",
+      bottom: "22px",
+      zIndex: "2147483000",
+      border: "0",
+      borderRadius: "999px",
+      padding: "10px 16px",
+      color: "#fff",
+      background: "#ffa116",
+      boxShadow: "0 6px 20px rgba(0,0,0,.24)",
+      fontSize: "14px",
+      fontWeight: "600",
+      cursor: "pointer"
+    });
+    button.addEventListener("click", () => {
+      void (async () => {
+        await readSession();
+        const action = toggleClickAction(
+          session.active,
+          Boolean(trainingHost),
+          datasetState
+        );
+        if (action === "exit") await exitTraining();
+        else if (action === "retry") {
+          datasetState = "loading";
+          refreshToggle();
+          await openTraining("restore");
+        } else await openTraining("click");
+      })();
+    });
+    document.body.append(button);
+  }
+  refreshToggle();
 }
 
-function processPage(): void {
+async function processPage(): Promise<void> {
+  await applyUrlChange();
+  const stored = await chrome.storage.local.get(SESSION_STORAGE_KEY);
+  await applyUrlChange();
+  const decision = storedSessionRestore(
+    location.pathname,
+    stored[SESSION_STORAGE_KEY],
+    Boolean(trainingHost)
+  );
+  session = decision.session;
+  if (decision.unmount) closeTraining();
   ensureToggle();
   decorateNativeRatings();
   decorateProblemPage();
   if (trainingHost) {
     trainingHost.dataset.theme = detectDarkTheme() ? "dark" : "light";
+  }
+  if (shouldQueueRestore(decision.restore, openInFlight, datasetState)) {
+    void openTraining("restore");
   }
 }
 
@@ -411,7 +557,11 @@ function scheduleProcess(): void {
   scheduled = true;
   window.setTimeout(() => {
     scheduled = false;
-    processPage();
+    processChain = processChain
+      .then(() => processPage())
+      .catch((error) => {
+        console.warn("[LeetCode Training] Unable to process page", error);
+      });
   }, 120);
 }
 
@@ -422,16 +572,23 @@ observer.observe(document.documentElement, {
 });
 
 window.setInterval(() => {
-  if (location.href !== currentUrl) {
-    currentUrl = location.href;
-    closeTraining();
-    scheduleProcess();
-  }
+  if (location.href === currentUrl) return;
+  scheduleProcess();
 }, 400);
 
-scheduleProcess();
+chrome.storage.local.onChanged.addListener((changes) => {
+  if (SESSION_STORAGE_KEY in changes) scheduleProcess();
+});
+
+void readSession().then(() => {
+  scheduleProcess();
+});
 void ensureDataset(false)
+  .then(() => {
+    datasetState = "ready";
+  })
   .catch((error) => {
     console.warn("[LeetCode Training] Initial data update failed", error);
+    if (!dataset) datasetState = "failed";
   })
   .finally(scheduleProcess);

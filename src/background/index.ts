@@ -18,6 +18,7 @@ import {
   createEmptyDataset,
   type StudyTranslationMap
 } from "../shared/normalize";
+import { selectStatusCacheKeys } from "../shared/trainingSession";
 import type {
   BackgroundRequest,
   DataRefreshResult,
@@ -203,6 +204,18 @@ async function syncStatus(
   return result;
 }
 
+async function invalidateStatus(
+  sender: chrome.runtime.MessageSender
+): Promise<{ cleared: number }> {
+  const pageUrl = sender.url ?? sender.tab?.url;
+  if (!pageUrl) return { cleared: 0 };
+  const host = new URL(pageUrl).host;
+  const all = await chrome.storage.session.get(null);
+  const keys = selectStatusCacheKeys(Object.keys(all), host);
+  if (keys.length > 0) await chrome.storage.session.remove(keys);
+  return { cleared: keys.length };
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   void ensureData(false);
 });
@@ -218,7 +231,9 @@ chrome.runtime.onMessage.addListener(
         ? ensureData(Boolean(request.force))
         : request.type === "SYNC_STATUS"
           ? syncStatus(sender, Boolean(request.force))
-          : Promise.reject(new Error("Unknown request"));
+          : request.type === "INVALIDATE_STATUS"
+            ? invalidateStatus(sender)
+            : Promise.reject(new Error("Unknown request"));
 
     operation
       .then(sendResponse)

@@ -111,6 +111,11 @@ export interface FilterState {
   sortDirection: SortDirection;
 }
 
+export interface TrainingSession {
+  active: boolean;
+  page: number;
+}
+
 export interface StatusSyncResult {
   signedIn: boolean;
   username: string | null;
@@ -127,4 +132,5 @@ export interface DataRefreshResult {
 
 export type BackgroundRequest =
   | { type: "ENSURE_DATA"; force?: boolean }
-  | { type: "SYNC_STATUS"; force?: boolean };
+  | { type: "SYNC_STATUS"; force?: boolean }
+  | { type: "INVALIDATE_STATUS" };
