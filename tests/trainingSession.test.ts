@@ -146,10 +146,12 @@ describe("toggle", () => {
     expect(toggleMessageKey(true, true, "ready")).toBe("closeTraining");
     expect(toggleMessageKey(true, false, "loading")).toBe("loading");
     expect(toggleMessageKey(true, false, "ready")).toBe("loading");
-    expect(toggleMessageKey(true, false, "failed")).toBe("loadFailed");
+    expect(toggleMessageKey(true, false, "failed")).toBe("retry");
     expect(toggleClickAction(false, false)).toBe("open");
     expect(toggleClickAction(true, false)).toBe("exit");
     expect(toggleClickAction(true, true)).toBe("exit");
+    expect(toggleClickAction(true, false, "failed")).toBe("retry");
+    expect(toggleClickAction(true, true, "failed")).toBe("exit");
   });
 });
 
@@ -177,6 +179,16 @@ describe("pagePersistWrite", () => {
     expect(
       pagePersistWrite(false, { active: false, page: 1 }, 3)
     ).toBeNull();
+  });
+
+  it("prefers the snapshot at write time so an overlapping exit wins", () => {
+    const atGet = { active: true, page: 2 };
+    const atSet = { active: false, page: 1 };
+    expect(pagePersistWrite(false, atGet, 3)).toEqual({
+      active: true,
+      page: 3
+    });
+    expect(pagePersistWrite(false, atSet, 3)).toBeNull();
   });
 });
 

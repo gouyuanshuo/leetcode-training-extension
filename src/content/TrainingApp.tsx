@@ -286,15 +286,16 @@ export function TrainingApp({
   useEffect(() => {
     if (!filtersLoaded) return;
     let cancelled = false;
-    void chrome.storage.local.get(SESSION_STORAGE_KEY).then((stored) => {
-      const next = pagePersistWrite(
-        cancelled,
-        stored[SESSION_STORAGE_KEY],
-        page
-      );
-      if (!next) return;
-      void chrome.storage.local.set({ [SESSION_STORAGE_KEY]: next });
-    });
+    void (async () => {
+      const stored = await chrome.storage.local.get(SESSION_STORAGE_KEY);
+      if (cancelled) return;
+      if (!pagePersistWrite(false, stored[SESSION_STORAGE_KEY], page)) return;
+      const latest = await chrome.storage.local.get(SESSION_STORAGE_KEY);
+      if (cancelled) return;
+      const write = pagePersistWrite(false, latest[SESSION_STORAGE_KEY], page);
+      if (!write) return;
+      await chrome.storage.local.set({ [SESSION_STORAGE_KEY]: write });
+    })();
     return () => {
       cancelled = true;
     };

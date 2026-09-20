@@ -118,10 +118,13 @@ function refreshToggle(): void {
   const toggle = document.getElementById(TOGGLE_ID) as HTMLButtonElement | null;
   if (!toggle) return;
   const locale = localeForHost(location.hostname);
-  toggle.textContent = t(
-    locale,
-    toggleMessageKey(session.active, Boolean(trainingHost), datasetState)
+  const key = toggleMessageKey(
+    session.active,
+    Boolean(trainingHost),
+    datasetState
   );
+  toggle.textContent = t(locale, key);
+  toggle.title = key === "retry" ? t(locale, "loadFailed") : "";
 }
 
 function ratingColor(rating: number): string {
@@ -509,9 +512,17 @@ function ensureToggle(): void {
     button.addEventListener("click", () => {
       void (async () => {
         await readSession();
-        const action = toggleClickAction(session.active, Boolean(trainingHost));
+        const action = toggleClickAction(
+          session.active,
+          Boolean(trainingHost),
+          datasetState
+        );
         if (action === "exit") await exitTraining();
-        else await openTraining("click");
+        else if (action === "retry") {
+          datasetState = "loading";
+          refreshToggle();
+          await openTraining("restore");
+        } else await openTraining("click");
       })();
     });
     document.body.append(button);

@@ -96,19 +96,22 @@ export function toggleMessageKey(
   dataset: ToggleDatasetState
 ): Extract<
   MessageKey,
-  "trainingMode" | "closeTraining" | "loading" | "loadFailed"
+  "trainingMode" | "closeTraining" | "loading" | "loadFailed" | "retry"
 > {
   if (!active) return "trainingMode";
   if (mounted) return "closeTraining";
-  if (dataset === "failed") return "loadFailed";
+  if (dataset === "failed") return "retry";
   return "loading";
 }
 
 export function toggleClickAction(
   active: boolean,
-  mounted: boolean
-): "open" | "exit" {
-  return active || mounted ? "exit" : "open";
+  mounted: boolean,
+  dataset: ToggleDatasetState = "ready"
+): "open" | "exit" | "retry" {
+  if (mounted) return "exit";
+  if (active && dataset === "failed") return "retry";
+  return active ? "exit" : "open";
 }
 
 export function sessionWriteFromStorage(
